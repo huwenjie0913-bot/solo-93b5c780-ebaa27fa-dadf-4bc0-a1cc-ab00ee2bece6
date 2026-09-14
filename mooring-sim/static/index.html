@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系缆方案浏览器推演台</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">⚓ 系缆方案推演台 <span class="sub">横风 · 落潮 · 时间步平衡</span></div>
+  <div class="top-controls">
+    <select id="scenarioSelect" title="选择场景"></select>
+    <button id="btnNewScenario" class="btn">新建场景</button>
+    <button id="btnSaveScenario" class="btn primary">保存场景</button>
+    <button id="btnCompare" class="btn">双方案对比</button>
+    <button id="btnPrint" class="btn">打印简报</button>
+    <span id="saveState" class="save-state"></span>
+  </div>
+</header>
+
+<!-- ===================== 编辑/单方案视图 ===================== -->
+<main id="viewEdit" class="view">
+  <section class="canvas-wrap">
+    <div class="canvas-toolbar">
+      <div class="plan-picker">
+        <label>当前方案</label>
+        <select id="planSelect"></select>
+        <button id="btnNewPlan" class="btn small">另存新方案</button>
+        <button id="btnDuplicatePlan" class="btn small">复制</button>
+        <button id="btnDeletePlan" class="btn small danger">删除</button>
+      </div>
+      <div class="add-line">
+        <label>添加缆绳类型</label>
+        <select id="newLineType">
+          <option value="head">首缆</option>
+          <option value="stern">尾缆</option>
+          <option value="breast">横缆</option>
+          <option value="spring">倒缆</option>
+        </select>
+        <button id="btnAddLine" class="btn small">从船首导缆孔引线（再点缆桩）</button>
+        <span class="hint">拖：船体移动泊位/导缆孔 · 缆桩移位 · 缆端圆点改接线</span>
+      </div>
+      <div class="zoom-controls">
+        <button class="btn small" id="zoomIn">＋</button>
+        <button class="btn small" id="zoomOut">－</button>
+        <button class="btn small" id="zoomFit">适配</button>
+        <span class="hint">滚轮缩放，Shift+拖动平移</span>
+      </div>
+    </div>
+    <canvas id="planCanvas" width="900" height="640"></canvas>
+
+    <!-- 时间轴 -->
+    <div class="timeline-block">
+      <div class="timeline-controls">
+        <button id="btnPlay" class="btn primary">▶ 播放</button>
+        <button id="btnPause" class="btn">⏸</button>
+        <button id="btnRestart" class="btn">⏮</button>
+        <label>速度 <select id="playSpeed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select></label>
+        <span class="time-readout"><b id="timeNow">0.0</b> h / <span id="timeTotal">6.0</span> h</span>
+        <span class="legend">
+          <i class="sw" style="background:#2ecc71"></i>≤70%
+          <i class="sw" style="background:#f1c40f"></i>70–90%
+          <i class="sw" style="background:#e67e22"></i>90–100%
+          <i class="sw" style="background:#e74c3c"></i>&gt;100%/失效
+        </span>
+      </div>
+      <canvas id="timelineCanvas" width="900" height="120"></canvas>
+    </div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="tabs">
+      <button class="tab active" data-tab="lines">缆绳</button>
+      <button class="tab" data-tab="env">环境分时</button>
+      <button class="tab" data-tab="ship">船/泊位</button>
+      <button class="tab" data-tab="result">结果</button>
+    </div>
+
+    <div class="tab-panel active" data-panel="lines">
+      <table class="line-table" id="lineTable">
+        <thead><tr>
+          <th>缆</th><th>型</th><th>桩</th><th>长度m</th><th>刚度<br>kN/m</th>
+          <th>安全<br>载荷</th><th>预张<br>kN</th><th>用</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="line-detail" id="lineDetail">
+        <p class="muted">点击画布或表格中的缆绳编辑；取消勾选"启用"可停用某根缆。</p>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="env">
+      <div class="env-form">
+        <p class="muted">按时刻录入潮位(m)、风向/风速、流速、吃水与受风面积；相邻关键帧线性插值。风向为<strong>风推船的方向角</strong>（90°=自海向岸横风，−90°=岸向海）。</p>
+        <table class="env-table" id="envTable">
+          <thead><tr>
+            <th>时刻 h</th><th>潮位 m</th><th>风向°</th><th>风速 m/s</th>
+            <th>流速 m/s</th><th>吃水 m</th><th>纵风 m²</th><th>横风 m²</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn small" id="btnAddEnv">＋ 添加关键帧</button>
+        <div class="grid2">
+          <label>仿真时长 h<input type="number" id="duration" step="0.5" min="0.5"></label>
+          <label>时间步 h<input type="number" id="dt" step="0.05" min="0.05"></label>
+          <label>护舷刚度 kN/m<input type="number" id="fenderK" step="1000"></label>
+          <label>护舷额定反力 kN<input type="number" id="fenderMax" step="50"></label>
+          <label>失衡判定阈值 kN<input type="number" id="imbaThreshold" step="5"></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="ship">
+      <div class="grid2">
+        <label>船名<input type="text" id="shipName"></label>
+        <label>船长 L m<input type="number" id="shipL" step="1"></label>
+        <label>船宽 B m<input type="number" id="shipB" step="0.5"></label>
+        <label>船心 x<input type="number" id="shipX" step="0.5"></label>
+        <label>船心 y<input type="number" id="shipY" step="0.5"></label>
+        <label>贴泊线 berthY<input type="number" id="berthY" step="0.5"></label>
+        <label>风偏航臂 m<input type="number" id="windArm" step="0.5"></label>
+        <label>流偏航臂 m<input type="number" id="currArm" step="0.5"></label>
+      </div>
+      <h4>导缆孔（船体系坐标，可在图上拖）</h4>
+      <div id="fairleadList"></div>
+      <h4>缆桩（可在图上拖，双击重命名）</h4>
+      <button class="btn small" id="btnAddBollard">＋ 添加缆桩</button>
+      <div id="bollardList"></div>
+    </div>
+
+    <div class="tab-panel" data-panel="result">
+      <div id="resultPanel" class="result-panel">
+        <p class="muted">编辑后自动求解；播放时间轴查看每步结果。</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ===================== 双方案对比视图 ===================== -->
+<main id="viewCompare" class="view" style="display:none">
+  <div class="compare-bar">
+    <button id="btnBackEdit" class="btn">← 返回编辑</button>
+    <label>方案甲 <select id="comparePlanA"></select></label>
+    <label>方案乙 <select id="comparePlanB"></select></label>
+    <button id="btnCompareRun" class="btn primary">并排回放</button>
+    <button id="btnComparePlay" class="btn">▶ 同步播放</button>
+    <span class="time-readout"><b id="cmpTime">0.0</b> h</span>
+  </div>
+  <div class="compare-grid">
+    <div class="compare-col">
+      <h3 id="cmpTitleA">方案甲</h3>
+      <canvas id="cmpCanvasA" width="560" height="440"></canvas>
+      <canvas id="cmpTimelineA" width="560" height="90"></canvas>
+      <div id="cmpSummaryA" class="cmp-summary"></div>
+    </div>
+    <div class="compare-col">
+      <h3 id="cmpTitleB">方案乙</h3>
+      <canvas id="cmpCanvasB" width="560" height="440"></canvas>
+      <canvas id="cmpTimelineB" width="560" height="90"></canvas>
+      <div id="cmpSummaryB" class="cmp-summary"></div>
+    </div>
+  </div>
+  <div id="cmpVerdict" class="cmp-verdict"></div>
+</main>
+
+<script src="/static/js/util.js"></script>
+<script src="/static/js/state.js"></script>
+<script src="/static/js/render.js"></script>
+<script src="/static/js/editor.js"></script>
+<script src="/static/js/timeline.js"></script>
+<script src="/static/js/player.js"></script>
+<script src="/static/js/compare.js"></script>
+<script src="/static/js/brief.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

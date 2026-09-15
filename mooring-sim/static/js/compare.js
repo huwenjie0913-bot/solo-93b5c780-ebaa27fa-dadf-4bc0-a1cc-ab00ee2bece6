@@ -34,7 +34,8 @@ const Compare = {
     selB.style.display = on ? "none" : "";
     emgSel.style.display = on ? "" : "none";
     if (on) {
-      const list = await U.api(`/api/scenarios/${App.scenario.id}/emergency-plans`);
+      const resp = await U.api(`/api/scenarios/${App.scenario.id}/emergency-plans`);
+      const list = Array.isArray(resp) ? resp : [];
       emgSel.innerHTML = "";
       emgSel.appendChild(U.el("option", { value: "" }, "★ 当前编辑中的动作"));
       list.forEach(p => emgSel.appendChild(U.el("option", { value: p.id }, p.name)));
@@ -99,6 +100,20 @@ const Compare = {
     if (useEmg) {
       if (emgId) {
         const ep = await U.api("/api/emergency-plans/" + emgId);
+        // 动作是针对保存时绑定的方案编排的，必须提交给该方案，
+        // 不能送入当前下拉里选中的另一方案（缆 id 对不上会被全部拒收）
+        let boundPlan = this.planB;
+        if (ep.planId && (!this.planB || this.planB.id !== ep.planId)) {
+          try {
+            boundPlan = await U.api("/api/plans/" + ep.planId);
+          } catch {
+            alert("该应急方案绑定的原方案已不存在，无法并排回放。");
+            return;
+          }
+        }
+        this.planB = boundPlan;
+        this.planA = boundPlan;   // 甲=绑定的原方案，乙=原方案+应急动作
+        bodyA = { scenario: App.scenario, plan: boundPlan };
         Emergency.actions = (ep.actions || []).map(a => Object.assign({ id: U.uid("act") }, a));
         Emergency.sortActions();
         this.emgNameB = ep.name;

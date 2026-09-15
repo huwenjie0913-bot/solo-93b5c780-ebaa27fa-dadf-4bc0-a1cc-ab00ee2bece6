@@ -210,21 +210,29 @@ const Emergency = {
 
   async applyLatest() {
     if (!this.latest || !this.latest.feasible) return;
+    // run() 重算时会先把 this.latest 清空，须在此之前保留搜索结果与目标时刻，
+    // 否则重算后读 this.latest.latestTime 会抛 TypeError
+    const latest = this.latest;
+    const latestTime = latest.latestTime;
     // 用搜索返回的平移后动作时刻替换当前动作
-    const byId = Object.fromEntries(this.latest.actions.map(a => [a.id, a]));
+    const byId = Object.fromEntries(latest.actions.map(a => [a.id, a]));
     this.actions.forEach(a => { if (byId[a.id]) a.t = byId[a.id].t; });
     this.sortActions();
     await this.run();
+    this.latest = latest;       // 恢复搜索结论（结果面板/时间轴标记继续显示）
+    this.renderLatest();
+    Timeline.redraw();
     this.renderActionList();
-    Player.setTime(this.latest.latestTime);
+    Player.setTime(latestTime);
   },
 
   // ------------------------------------------------ 应急方案存取
   async refreshSavedPlans() {
     if (!App.scenario) return;
     try {
-      this.savedPlans = await U.api(
+      const list = await U.api(
         `/api/scenarios/${App.scenario.id}/emergency-plans?planId=${App.plan.id}`);
+      this.savedPlans = Array.isArray(list) ? list : [];
     } catch { this.savedPlans = []; }
     const sel = U.$("#emgSavedSelect");
     sel.innerHTML = "";

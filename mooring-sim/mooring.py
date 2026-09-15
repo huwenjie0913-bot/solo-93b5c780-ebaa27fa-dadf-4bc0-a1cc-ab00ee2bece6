@@ -1077,7 +1077,8 @@ def find_latest_intervention(scenario, plan, actions, t_lo, t_hi,
 
     def feasible(delta):
         r = run_emergency(scenario, plan, shifted(delta), dt=dt)
-        return r["summary"]["balanced"], r
+        # 成败只看是否失衡：自动断缆允许发生，只要全程未平衡载荷不越限即可行
+        return r["summary"]["firstImbalance"] is None, r
 
     grid = []
     k = int(round((t_hi - t_lo) / resolution))

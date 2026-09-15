@@ -32,12 +32,18 @@ const Brief = {
       const b = sc.bollards.find(b => b.id === l.bollardId);
       const u = s.maxUtil[l.id] || 0;
       const cls = u >= 1 ? "bad" : u >= 0.9 ? "bad" : u >= 0.7 ? "" : "ok";
+      const lenMode = l.autoLength === false ? "手填" : "几何";
+      // 峰值应变（从步骤中取该缆最大应变）
+      let maxStrain = 0;
+      for (const st of sim.steps) if (st.strain?.[l.id] != null) maxStrain = Math.max(maxStrain, st.strain[l.id]);
       return `<tr>
         <td>${l.name}</td><td>${U.lineTypeName(l.type)}</td>
         <td>${b ? b.name : "—"}</td>
-        <td>${l.length.toFixed(1)}</td><td>${l.k.toFixed(0)}</td>
+        <td>${l.length.toFixed(1)}<br><span style="color:#777;font-size:10px">${lenMode}</span></td>
+        <td>${l.k.toFixed(0)}</td>
         <td>${l.safeLoad.toFixed(0)}</td><td>${l.pretension.toFixed(0)}</td>
         <td class="${cls}">${(u * 100).toFixed(0)}%</td>
+        <td>${(maxStrain * 100).toFixed(2)}%</td>
         <td>${s.maxUtilTime[l.id]?.toFixed(2) ?? "—"}</td>
         <td>${l.active === false ? "停用" : "在用"}</td></tr>`;
     }).join("");
@@ -75,10 +81,10 @@ ${sc.ship.fairleads.length} 个导缆孔。</p>
 <th>流速m/s</th><th>吃水m</th><th>纵受风m²</th><th>横受风m²</th></tr></thead>
 <tbody>${envRows}</tbody></table>
 
-<h2>三、系缆配置与峰值利用率</h2>
-<table><thead><tr><th>缆名</th><th>类型</th><th>缆桩</th><th>长度m</th>
+<h2>三、系缆配置与峰值利用率（安装缆长含潮位高差；手填长度直接决定无载原长与应变）</h2>
+<table><thead><tr><th>缆名</th><th>类型</th><th>缆桩</th><th>安装缆长m</th>
 <th>刚度kN/m</th><th>安全载荷kN</th><th>预张力kN</th><th>峰值利用率</th>
-<th>峰值时刻h</th><th>状态</th></tr></thead><tbody>${lineRows}</tbody></table>
+<th>峰值应变</th><th>峰值时刻h</th><th>状态</th></tr></thead><tbody>${lineRows}</tbody></table>
 
 <h2>四、图示</h2>
 <div class="grid">

@@ -42,6 +42,7 @@ function drawScene(o) {
   const { ctx, vp, scenario, plan, step } = o;
   const ship = scenario.ship;
   const st = step ? step.state : { x: ship.x, y: ship.y, psi: ship.psi0 || 0 };
+  const tide = step ? step.env.tide : (scenario.env?.[0]?.tide ?? 0);
   const W = ctx.canvas.clientWidth || ctx.canvas.width;
   const H = ctx.canvas.clientHeight || ctx.canvas.height;
   ctx.clearRect(0, 0, W, H);
@@ -74,9 +75,9 @@ function drawScene(o) {
   // 环境箭头（风/流），放在右上空白区
   if (step && !o.dimmed) drawEnvArrows(ctx, vp, step, W, H);
 
-  // 缆绳（先画线再画船和桩，使端点在上层）
+  // 缆绳（俯视图绘水平投影；先画线再画船和桩，使端点在上层）
   for (const line of plan.lines) {
-    drawLine(ctx, vp, scenario, line, st, step, o);
+    drawLine(ctx, vp, scenario, line, st, step, o, tide);
   }
 
   // 船体
@@ -85,18 +86,22 @@ function drawScene(o) {
   // 缆桩
   for (const b of scenario.bollards) drawBollard(ctx, vp, b);
 
-  // 标签：张力值（播放时）
+  // 标签：张力值（播放时，含垂直角/应变提示）
   if (step && !o.dimmed) {
     ctx.font = "10px sans-serif";
     for (const line of plan.lines) {
       if (line.active === false) continue;
       const T = step.tensions[line.id];
       if (T == null || T < 0.5) continue;
-      const { p, b } = G.lineEndpoints(line, st);
+      const { p, b } = G.lineEndpoints(line, st, tide);
       const mid = { x: (p.x + b.x) / 2, y: (p.y + b.y) / 2 };
       const s2 = vp.toScreen(mid);
       const u = step.util[line.id] || 0;
-      drawTag(ctx, s2.x, s2.y, `${Math.round(T)}kN`, U.utilColor(u));
+      const va = step.vAngle?.[line.id];
+      const tag = va != null && Math.abs(va) > 0.5
+        ? `${Math.round(T)}kN ${va > 0 ? "↧" : "↥"}${Math.abs(va).toFixed(0)}°`
+        : `${Math.round(T)}kN`;
+      drawTag(ctx, s2.x, s2.y, tag, U.utilColor(u));
     }
   }
 }
@@ -187,8 +192,8 @@ function drawBollard(ctx, vp, b) {
   ctx.fillText(b.name || b.id, p.x + 8, p.y + 3);
 }
 
-function drawLine(ctx, vp, scenario, line, st, step, o) {
-  const { p, b } = G.lineEndpoints(line, st);
+function drawLine(ctx, vp, scenario, line, st, step, o, tide = 0) {
+  const { p, b, dz } = G.lineEndpoints(line, st, tide);
   const a = vp.toScreen(p), c = vp.toScreen(b);
   const inactive = line.active === false;
   const failed = step && step.failed && step.failed[line.id];

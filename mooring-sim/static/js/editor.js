@@ -142,7 +142,7 @@ const Editor = {
       const hit = hitTest(this.vp, App.scenario, App.plan, s);
       if (!hit) {
         const b = { id: U.uid("b"), name: `${App.scenario.bollards.length + 1}#新桩`,
-          x: Math.round(w.x), y: Math.round(w.y) };
+          x: Math.round(w.x), y: Math.round(w.y), z: 4.0 };
         App.scenario.bollards.push(b);
         renderPanels(); this.redraw(); scheduleSim();
       } else if (hit.kind === "bollard") {
@@ -198,7 +198,7 @@ const Editor = {
       const sh = App.scenario.ship;
       App.scenario.bollards.push({ id: U.uid("b"),
         name: `${App.scenario.bollards.length + 1}#桩`,
-        x: U.clamp(60, -200, 200), y: sh.berthY - 8 });
+        x: U.clamp(sh.L / 2 + 20, -200, 200), y: sh.berthY - 8, z: 4.0 });
       renderPanels(); this.redraw(); scheduleSim();
     };
     U.$("#btnAddEnv").onclick = () => {
@@ -224,11 +224,13 @@ const Editor = {
       });
     }
     for (const [id, key] of [["duration", "duration"], ["dt", "dt"],
-      ["fenderK", "fenderK"], ["fenderMax", null], ["imbaThreshold", "imbaThreshold"]]) {
+      ["fenderK", "fenderK"], ["fenderMax", "fenderMax"],
+      ["fenderSpacing", "fenderSpacing"], ["imbaThreshold", "imbaThreshold"]]) {
       U.$("#" + id).addEventListener("input", e => {
         const v = parseFloat(e.target.value) || 0;
-        if (key) App.scenario[key] = v;
-        else App.scenario.ship.fenderMax = v;
+        if (key === "fenderK") App.scenario[key] = v;
+        else if (key === "duration" || key === "dt" || key === "imbaThreshold") App.scenario[key] = v;
+        else App.scenario.ship[key] = v;
         this.redraw(); scheduleSim();
       });
     }
@@ -357,12 +359,19 @@ function renderLineDetail() {
 
   const autoC = U.el("input", { type: "checkbox" });
   autoC.checked = l.autoLength !== false;
-  const lenI = U.el("input", { type: "number", value: Math.round(l.length * 100) / 100, disabled: autoC.checked ? "" : null });
-  autoC.onchange = () => { l.autoLength = autoC.checked; if (autoC.checked) l.length = G.lineLength(l); renderPanels(); scheduleSim(); };
-  lenI.oninput = e => { l.length = parseFloat(e.target.value) || 0; scheduleSim(); };
-  box.appendChild(row("长度 m", U.el("div", { style: "display:flex;gap:6px;align-items:center" },
-    [autoC, U.el("span", { class: "muted", style: "font-size:11px" }, "自动"), lenI,
-     U.el("span", { class: "muted", style: "font-size:11px" }, `几何 ${autoLen.toFixed(1)}`)])));
+  const lenI = U.el("input", { type: "number", value: Math.round(l.length * 100) / 100, disabled: autoC.checked ? "" : null, step: "0.1" });
+  autoC.onchange = () => {
+    l.autoLength = autoC.checked;
+    if (autoC.checked) l.length = autoLen;
+    renderPanels(); scheduleSim();
+  };
+  lenI.oninput = e => { l.length = parseFloat(e.target.value) || 0; l.autoLength = false; autoC.checked = false; scheduleSim(); };
+  box.appendChild(row("安装缆长 m", U.el("div", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap" },
+    [autoC, U.el("span", { class: "muted", style: "font-size:11px" }, "按几何"), lenI,
+     U.el("span", { class: "muted", style: "font-size:11px" },
+       `初始几何 ${autoLen.toFixed(1)}（含潮位高差）`)])));
+  box.appendChild(U.el("p", { class: "muted", style: "font-size:10.5px;margin:2px 0 6px" },
+    "手填长度为安装时两系点间的实际缆长；缩短会增大初始应变/张力并使缆更早超载，加长超过几何长度则初始松弛。"));
 
   for (const [label, key] of [["刚度 kN/m", "k"], ["安全载荷 kN", "safeLoad"], ["预张力 kN", "pretension"]]) {
     const i = U.el("input", { type: "number", value: l[key], style: "width:130px" });
@@ -387,6 +396,7 @@ function renderEnvTable() {
   U.$("#dt").value = sc.dt;
   U.$("#fenderK").value = sc.fenderK;
   U.$("#fenderMax").value = sc.ship.fenderMax ?? 800;
+  U.$("#fenderSpacing").value = sc.ship.fenderSpacing ?? 30;
   U.$("#imbaThreshold").value = sc.imbaThreshold;
   const tb = U.$("#envTable tbody");
   tb.innerHTML = "";
@@ -422,20 +432,25 @@ function renderShipPanel() {
     const el = U.$("#" + id);
     if (document.activeElement !== el) el.value = v;
   }
-  // 导缆孔
+  // 导缆孔（局部 x/y + 高程 z，潮位通过桩-孔高差影响缆长）
   const fl = U.$("#fairleadList");
   fl.innerHTML = "";
   sh.fairleads.forEach((f, i) => {
-    const xI = U.el("input", { type: "number", value: f.x, style: "width:70px" });
-    const yI = U.el("input", { type: "number", value: f.y, style: "width:70px" });
+    const xI = U.el("input", { type: "number", value: f.x, style: "width:60px" });
+    const yI = U.el("input", { type: "number", value: f.y, style: "width:60px" });
+    const zI = U.el("input", { type: "number", value: f.z ?? 3.5, step: "0.1", style: "width:52px", title: "高程 m（潮位基准）" });
     xI.oninput = e => { f.x = U.clamp(parseFloat(e.target.value) || 0, -sh.L / 2, sh.L / 2);
       App.plan.lines.filter(l => l.fairleadId === f.id).forEach(l => l.local = [f.x, f.y]);
       Editor.redraw(); scheduleSim(); };
     yI.oninput = e => { f.y = U.clamp(parseFloat(e.target.value) || 0, -sh.B / 2, sh.B / 2);
       App.plan.lines.filter(l => l.fairleadId === f.id).forEach(l => l.local = [f.x, f.y]);
       Editor.redraw(); scheduleSim(); };
-    fl.appendChild(U.el("div", { style: "display:flex;gap:6px;align-items:center;margin:4px 0" },
-      [U.el("span", { style: "width:54px;color:var(--muted)" }, f.name), xI, yI,
+    zI.oninput = e => { f.z = parseFloat(e.target.value) || 0; scheduleSim(); };
+    fl.appendChild(U.el("div", { style: "display:flex;gap:4px;align-items:center;margin:4px 0;flex-wrap:wrap" },
+      [U.el("span", { style: "width:44px;color:var(--muted)" }, f.name),
+       U.el("span", { class: "muted", style: "font-size:10px" }, "x"), xI,
+       U.el("span", { class: "muted", style: "font-size:10px" }, "y"), yI,
+       U.el("span", { class: "muted", style: "font-size:10px" }, "z高"), zI,
        U.el("button", { class: "btn small danger", onclick: () => {
          if (App.plan.lines.some(l => l.fairleadId === f.id)) { alert("该导缆孔上还接有缆绳"); return; }
          sh.fairleads.splice(i, 1); renderPanels(); Editor.redraw(); } }, "×")]));
@@ -443,19 +458,24 @@ function renderShipPanel() {
   if (!sh.fairleads.length) {
     fl.appendChild(U.el("button", { class: "btn small", onclick: () => {
       sh.fairleads.push({ id: U.uid("f"), name: "导缆孔" + (sh.fairleads.length + 1),
-        x: sh.L / 2 - 5, y: -sh.B / 2 + 4 });
+        x: sh.L / 2 - 5, y: -sh.B / 2 + 4, z: 3.5 });
       renderPanels(); Editor.redraw(); } }, "＋ 添加导缆孔"));
   }
-  // 缆桩列表
+  // 缆桩列表（平面 x/y + 高程 z）
   const bl = U.$("#bollardList");
   bl.innerHTML = "";
   App.scenario.bollards.forEach((b, i) => {
-    const xI = U.el("input", { type: "number", value: b.x, style: "width:70px" });
-    const yI = U.el("input", { type: "number", value: b.y, style: "width:70px" });
+    const xI = U.el("input", { type: "number", value: b.x, style: "width:60px" });
+    const yI = U.el("input", { type: "number", value: b.y, style: "width:60px" });
+    const zI = U.el("input", { type: "number", value: b.z ?? 4.0, step: "0.1", style: "width:52px", title: "桩顶高程 m" });
     xI.oninput = e => { b.x = parseFloat(e.target.value) || 0; Editor.redraw(); scheduleSim(); };
     yI.oninput = e => { b.y = parseFloat(e.target.value) || 0; Editor.redraw(); scheduleSim(); };
-    bl.appendChild(U.el("div", { style: "display:flex;gap:6px;align-items:center;margin:4px 0" },
-      [U.el("span", { style: "width:54px;color:var(--muted)" }, b.name), xI, yI,
+    zI.oninput = e => { b.z = parseFloat(e.target.value) || 0; scheduleSim(); };
+    bl.appendChild(U.el("div", { style: "display:flex;gap:4px;align-items:center;margin:4px 0;flex-wrap:wrap" },
+      [U.el("span", { style: "width:44px;color:var(--muted)" }, b.name),
+       U.el("span", { class: "muted", style: "font-size:10px" }, "x"), xI,
+       U.el("span", { class: "muted", style: "font-size:10px" }, "y"), yI,
+       U.el("span", { class: "muted", style: "font-size:10px" }, "z高"), zI,
        U.el("button", { class: "btn small danger", onclick: () => {
          if (App.plan.lines.some(l => l.bollardId === b.id)) { alert("该缆桩上还接有缆绳"); return; }
          App.scenario.bollards.splice(i, 1); renderPanels(); Editor.redraw(); } }, "×")]));
@@ -478,13 +498,19 @@ function renderResultPanel() {
     <div class="k"><div class="k">最大船位偏移</div><div class="v">${s.maxDisplacement.toFixed(2)} m</div></div>
     <div class="k"><div class="k">当前主导载荷</div><div class="v" style="font-size:14px">${step.dominant} ${step.dominantMag.toFixed(0)}kN</div></div>
   </div>
-  <h4>当前时刻各缆利用率（t=${step.t.toFixed(2)}h）</h4>`;
+  <h4>当前时刻各缆利用率（t=${step.t.toFixed(2)}h，潮位 ${step.env.tide.toFixed(2)}m）</h4>`;
   for (const l of App.plan.lines) {
     const u = step.util[l.id] || 0, T = step.tensions[l.id] || 0;
     const failed = step.failed[l.id], inactive = l.active === false;
+    const strain = step.strain?.[l.id] ?? 0;
+    const va = step.vAngle?.[l.id] ?? 0;
+    let detail;
+    if (inactive) detail = "停用";
+    else if (failed) detail = "已失效";
+    else detail = `${T.toFixed(0)}kN · ${(u * 100).toFixed(0)}% · ε${(strain * 100).toFixed(2)}% · 仰角${va.toFixed(1)}°`;
     html += `<div class="bar-row"><span class="nm">${l.name}</span>
       <span class="bar"><i style="width:${U.clamp(u, 0, 1) * 100}%;background:${failed ? "#e74c3c" : U.utilColor(u)}"></i></span>
-      <span class="val">${inactive ? "停用" : failed ? "已失效" : `${T.toFixed(0)}kN · ${(u * 100).toFixed(0)}%`}</span></div>`;
+      <span class="val" style="width:172px;font-size:10px">${detail}</span></div>`;
   }
   html += `<h4>当前未平衡载荷</h4>
     <p>横向残余 ${step.residual.fy.toFixed(0)} kN ｜ 纵向残余 ${step.residual.fx.toFixed(0)} kN ｜

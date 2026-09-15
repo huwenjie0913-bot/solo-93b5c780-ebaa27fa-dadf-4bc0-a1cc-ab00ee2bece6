@@ -37,7 +37,7 @@ async function loadScenario(id) {
 
 async function savePlan(plan) {
   const res = await U.api("/api/plans", { method: "POST", body: plan });
-  return res.id;
+  return res.id;  // 始终返回标量 id
 }
 
 async function switchPlan(id) {
@@ -98,19 +98,20 @@ async function init() {
     if (!name) return;
     const L = 150, B = 26;
     const sc = {
-      name, duration: 6, dt: 0.2, fenderK: 30000, imbaThreshold: 30,
+      name, duration: 6, dt: 0.2, fenderK: 30000, imbaThreshold: 40,
       ship: {
-        name: "新船", L, B, x: 0, y: 0, psi0: 0, berthY: -15, fenderMax: 800,
+        name: "新船", L, B, x: 0, y: 0, psi0: 0, berthY: -B / 2, fenderMax: 800,
+        fenderSpacing: 30,
         windArm: 8, currArm: 4, surfX: 130, surfY: 58,
         fairleads: [
-          { id: "f_bow", name: "船首", x: L / 2 - 4, y: -B / 2 + 4 },
-          { id: "f_stern", name: "船尾", x: -L / 2 + 4, y: -B / 2 + 4 },
+          { id: "f_bow", name: "船首", x: L / 2 - 4, y: -B / 2 + 4, z: 3.5 },
+          { id: "f_stern", name: "船尾", x: -L / 2 + 4, y: -B / 2 + 4, z: 3.5 },
         ],
       },
       bollards: [
-        { id: "b1", name: "1#桩", x: -L / 2 - 30, y: -24 },
-        { id: "b2", name: "2#桩", x: 0, y: -24 },
-        { id: "b3", name: "3#桩", x: L / 2 + 30, y: -24 },
+        { id: "b1", name: "1#桩", x: -L / 2 - 30, y: -24, z: 4.0 },
+        { id: "b2", name: "2#桩", x: 0, y: -24, z: 4.0 },
+        { id: "b3", name: "3#桩", x: L / 2 + 30, y: -24, z: 4.0 },
       ],
       env: [
         { t: 0, tide: 2, windDir: Math.PI / 2, windSpeed: 12, currentSpeed: 1.5,
@@ -119,17 +120,19 @@ async function init() {
           currentDir: 0, draft: 11.5, areaX: 420, areaY: 2400 },
       ],
     };
-    const sid = await U.api("/api/scenarios", { method: "POST", body: sc });
-    const plan = { scenarioId: sid, name: "方案1", lines: [] };
-    const pid = await savePlan(plan);
+    // 关键：创建接口返回 {id}，必须取标量再保存默认方案，
+    // 否则 scenarioId 变成 dict，触发 SQLite ProgrammingError。
+    const created = await U.api("/api/scenarios", { method: "POST", body: sc });
+    const sid = created.id;
+    const plan = await savePlan({ scenarioId: sid, name: "方案1", lines: [] });
+    const pid = typeof plan === "string" ? plan : plan.id;
     const sel = U.$("#scenarioSelect");
-    await listAllScenarios().then(ls => {
-      sel.innerHTML = "";
-      ls.forEach(s => sel.appendChild(U.el("option", { value: s.id }, s.name)));
-      sel.value = sid;
-    });
+    const ls = await listAllScenarios();
+    sel.innerHTML = "";
+    ls.forEach(s => sel.appendChild(U.el("option", { value: s.id }, s.name)));
+    sel.value = sid;
     await loadScenario(sid);
-    switchPlan(pid);
+    await switchPlan(pid);
   };
 
   U.$("#btnNewPlan").onclick = async () => {

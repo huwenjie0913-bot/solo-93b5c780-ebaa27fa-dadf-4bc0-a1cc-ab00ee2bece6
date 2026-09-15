@@ -149,55 +149,67 @@ def line_tension(L, L0, k):
     return k * (L / L0 - 1.0)
 
 
-def line_force(bollard, local, state, L0, k, pretension=0.0):
-    """单根缆绳对船体的力 (fx, fy, m) 与张力/几何信息。
+def line_force(bollard, local, state, L0, k, dz=0.0):
+    """单根缆绳对船体的水平力 (fx, fy)、首摇力矩 m 与张力/几何信息。
 
-    预张力按安装时（初始船位 state0）几何给出，平衡计算中缆的有效原长
-    由 L0_eff = L(初始) / (1 + T0/k) 反推，使初始张力恰为预张力。
+    三维索模型：桩与导缆孔存在高差 dz（桩减孔，随潮位变化），
+    实际缆长 L = sqrt(水平距² + dz²)；张力 T = k(L/L0 - 1) 沿 3D 缆向，
+    对船体的水平分力按水平投影占比 rho/L 折减。
     """
     px, py = fairlead_world({"L": 1.0}, local, state)
-    bx, by = bollard
+    bx, by = bollard[0], bollard[1]
     dx, dy = bx - px, by - py
-    L = math.hypot(dx, dy)
+    rho = math.hypot(dx, dy)
+    L = math.hypot(rho, dz)
     if L < 1e-9:
-        return {"fx": 0, "fy": 0, "m": 0, "T": 0, "L": L, "ux": 0, "uy": 0, "px": px, "py": py}
-    ux, uy = dx / L, dy / L
+        return {"fx": 0, "fy": 0, "m": 0, "T": 0, "L": L, "rho": rho,
+                "ux": 0, "uy": 0, "px": px, "py": py, "dz": dz,
+                "vAngle": 0.0, "strain": 0.0}
+    ux, uy = dx / L, dy / L          # 3D 单位向量的水平分量
     T = line_tension(L, L0, k)
     fx, fy = T * ux, T * uy
     m = (px - state[0]) * fy - (py - state[1]) * fx
-    return {"fx": fx, "fy": fy, "m": m, "T": T, "L": L, "ux": ux, "uy": uy,
-            "px": px, "py": py, "dT_dL": (k / L0) if L > L0 else 0.0}
+    return {"fx": fx, "fy": fy, "m": m, "T": T, "L": L, "rho": rho,
+            "ux": ux, "uy": uy, "px": px, "py": py, "dz": dz,
+            "vAngle": math.degrees(math.asin(dz / L)),
+            "strain": (L / L0 - 1.0) if L0 > 0 else 0.0,
+            "dT_dL": (k / L0) if L > L0 else 0.0}
 
 
 def contact_force(ship, state, fender_k):
-    """船体压向岸侧（y <= berthY）的线性护舷反弹力，逐角点检查。"""
+    """沿岸侧舷边按护舷间距离散、但穿透随船位连续的护舷反力。
+
+    沿船长每隔 fender_spacing（默认 30m）取一具护舷，每具反力
+    F = k·pen（pen≤0 为零），达到单具额定 fenderMax 后截断。
+    离散点足够多且穿透连续，首摇刚度有限、接触随 ψ 平滑出现/消失。
+    Jacobian 由 assemble_residual 用中心差分单独计算。
+    """
     X, Y, psi = state
     c, s = math.cos(psi), math.sin(psi)
     L2, B2 = ship["L"] / 2, ship["B"] / 2
-    fx = fy = m = 0.0
-    n_contact = 0
-    max_pen = 0.0
-    corners = []
-    for lx in (-L2, L2):
-        for ly in (-B2, B2):
-            wx = X + lx * c - ly * s
-            wy = Y + lx * s + ly * c
-            pen = ship["berthY"] - wy
-            if pen > 0:
-                cf = fender_k * pen
-                fmax = ship.get("fenderMax", 1.0e12)
-                if cf > fmax:
-                    cf = fmax  # 护舷达到额定反力后不再增加支撑
-                fy += cf
-                m += (wx - X) * cf  # r=(wx-X,wy-Y), F=(0,cf): m=rx*cf
-                n_contact += 1
-                max_pen = max(max_pen, pen)
-                corners.append({"wx": wx, "wy": wy, "rcx": wx - X,
-                                "dpy_dpsi": lx * c - ly * s, "F": cf,
-                                "kc": 0.0 if cf >= fmax else fender_k})
-    return {"fx": fx, "fy": fy, "m": m, "n": n_contact, "pen": max_pen,
-            "corners": corners}
+    fmax = ship.get("fenderMax", 1.0e12)
+    spacing = ship.get("fenderSpacing", 30.0)
+    contact_tol = 0.02
 
+    n = max(2, int(math.ceil(ship["L"] / spacing)))
+    fy = m = 0.0
+    max_pen = 0.0
+    active = 0
+    for j in range(n + 1):
+        lx = -L2 + ship["L"] * j / n
+        ly = -B2
+        wx = X + lx * c - ly * s
+        wy = Y + lx * s + ly * c
+        pen = ship["berthY"] - wy + contact_tol
+        if pen > 0:
+            f = fender_k * pen
+            if f > fmax:
+                f = fmax
+            fy += f
+            m += (wx - X) * f
+            active += 1
+            max_pen = max(max_pen, pen)
+    return {"fx": 0.0, "fy": fy, "m": m, "n": active, "pen": max_pen, "corners": []}
 
 # ---------------------------------------------------------------- 平衡迭代
 def assemble_residual(state, lines, bollards, env, ship, ext, fender_k):
@@ -210,21 +222,23 @@ def assemble_residual(state, lines, bollards, env, ship, ext, fender_k):
             tensions[ln["id"]] = 0.0
             continue
         b = bollards[ln["bollardId"]]
-        info = line_force(b, ln["local"], state, ln["L0_eff"], ln["k"])
+        # 潮位随时间步变化：高差变化使三维缆长/水平投影改变（落潮提缆）
+        dz = line_dz(ln.get("bollardZ", b[2] if len(b) > 2 else 5.0),
+                     ln.get("fairleadZ", 3.0), env)
+        info = line_force(b, ln["local"], state, ln["L0_eff"], ln["k"], dz=dz)
         T = info["T"]
         tensions[ln["id"]] = T
         R[0] += info["fx"]
         R[1] += info["fy"]
         R[2] += info["m"]
-        # 解析切向刚度矩阵（对称）：
-        #   K_t = k_t u u^T + (T/L)(I - u u^T)
-        #   导缆孔 r_p 对 psi 导数：r_psi = (-lx s - ly c, lx c - ly s)
+        # 三维索切向刚度（水平运动），矩阵对称：
+        #   F_horiz = T u_horiz；u 为 3D 单位向量的水平分量，L 为 3D 缆长
+        #   K = T/L * I2 + (kt - T/L) u u^T，残差 Jacobian 取 -K
         kt = info["dT_dL"]
         L = info["L"]
         if L > 1e-9:
             ux, uy = info["ux"], info["uy"]
             a = kt - T / L
-            # dF/dp = -K_t（恢复力，符号为负）
             kxx = T / L + a * ux * ux
             kxy = a * ux * uy
             kyy = T / L + a * uy * uy
@@ -251,72 +265,118 @@ def assemble_residual(state, lines, bollards, env, ship, ext, fender_k):
     R[0] += cf["fx"]
     R[1] += cf["fy"]
     R[2] += cf["m"]
-    # 护舷刚度（逐接触角点解析）
-    for cn in cf["corners"]:
-        kc = cn["kc"]
-        J[1][1] += kc
-        J[1][2] += -kc * cn["dpy_dpsi"]
-        J[2][1] += -kc * cn["dpy_dpsi"]
-        J[2][2] += -cn["rcx"] * kc * cn["dpy_dpsi"]
+    # 离散护舷的切向刚度用中心有限差分（接触/脱离边界非光滑，解析雅可比会过刚）。
+    # 当当前状态或任一扰动状态存在接触时才做差分；无接触时护舷项恒为零。
+    eps_q = (2e-4, 2e-4, 2e-6)
+    need = cf["n"] > 0
+    cpm = []
+    for j in range(3):
+        sp, sm = list(state), list(state)
+        sp[j] += eps_q[j]
+        sm[j] -= eps_q[j]
+        cp = contact_force(ship, sp, fender_k)
+        cm = contact_force(ship, sm, fender_k)
+        cpm.append((cp, cm))
+        need = need or cp["n"] > 0 or cm["n"] > 0
+    if need:
+        for j in range(3):
+            cp, cm = cpm[j]
+            J[1][j] += (cp["fy"] - cm["fy"]) / (2 * eps_q[j])
+            J[2][j] += (cp["m"] - cm["m"]) / (2 * eps_q[j])
+        J[0][1] = J[1][0]  # 护舷无 x 向力，保持对称
     return R, J, tensions
 
 
 def solve_equilibrium(state0, lines, bollards, env, ship, ext, fender_k,
-                      max_iter=80, tol=1e-3):
-    """Newton 迭代求平衡船位。缆绳状态（松弛/张紧）在迭代中冻结，由外层主动集切换。"""
+                      max_iter=120, tol_f=0.15, tol_m=30.0):
+    """Newton 迭代求平衡船位。缆绳状态（松弛/张紧）在迭代中冻结，由外层主动集切换。
+
+    收敛容差按物理意义给出：残余力 0.5 kN、残余力矩 50 kN·m、
+    平移增量 1e-4 m、转角增量 1e-5 rad。
+    """
     anchor_k = 20.0  # 极弱参考约束，仅在全部缆绳失效时防止刚体数值漂移（kN/m）
+
+    def residual_norm(st):
+        Rb, _, _ = assemble_residual(st, lines, bollards, env, ship, ext, fender_k)
+        return math.hypot(Rb[0] + anchor_k * (st[0] - state0[0]),
+                          Rb[1] + anchor_k * (st[1] - state0[1])) + \
+            abs(Rb[2] + anchor_k * 0.01 * st[2]) / 50.0
+
     state = list(state0)
-    last_tensions = {}
     for _ in range(max_iter):
         R, J, tensions = assemble_residual(state, lines, bollards, env, ship, ext, fender_k)
-        last_tensions = tensions
-        # 弱锚定：把船"拉"回泊位附近，保证全缆失效后仍可图示，残余力依旧可见
-        R[0] += anchor_k * (state[0] - state0[0])
-        R[1] += anchor_k * (state[1] - state0[1])
-        R[2] += anchor_k * state[2] * 0.01
-        J[0][0] += anchor_k
-        J[1][1] += anchor_k
+        res_f, res_m = math.hypot(R[0], R[1]), abs(R[2])
+        if res_f < tol_f and res_m < tol_m:
+            break
+        Ra = [R[0] + anchor_k * (state[0] - state0[0]),
+              R[1] + anchor_k * (state[1] - state0[1]),
+              R[2] + anchor_k * 0.01 * state[2]]
+        for i in range(2):
+            J[i][i] += anchor_k
         J[2][2] += anchor_k * 0.01
-        d = solve_linear_3x3(J, [-R[0], -R[1], -R[2]])
+        d = solve_linear_3x3(J, [-Ra[0], -Ra[1], -Ra[2]])
         if d is None:
             break
-        # 限制单步步长
+        # 步长上限（力/力矩很大时仍允许足够穿透量找到护舷平衡）
         scale = 1.0
-        for limit, dv in ((0.5, abs(d[0])), (0.5, abs(d[1])), (0.02, abs(d[2]))):
+        for limit, dv in ((0.05, abs(d[0])), (0.05, abs(d[1])), (0.002, abs(d[2]))):
             if dv > limit:
                 scale = min(scale, limit / dv)
-        d = [v * scale for v in d]
-        nrm = math.hypot(math.hypot(R[0], R[1]), R[2])
-        state = [state[i] + d[i] for i in range(3)]
-        if nrm < tol and math.hypot(d[0], d[1]) < 1e-5 and abs(d[2]) < 1e-7:
+        # 残差不下降时阻尼回退（比较口径与实际残差一致）
+        alpha, cur = scale, residual_norm(state)
+        for _bt in range(14):
+            cand = [state[i] + d[i] * alpha for i in range(3)]
+            if residual_norm(cand) <= cur * (1.0 - 1e-4) + 1e-9:
+                state = cand
+                break
+            alpha *= 0.5
+        else:
             break
     R, _, tensions = assemble_residual(state, lines, bollards, env, ship, ext, fender_k)
     return state, tensions, R
 
 
-def prepare_lines(plan, bollards, state0, sim_env_for_pretension):
-    """预处理缆绳：由标称长度/预张力反推有效原长 L0_eff。
+def line_dz(bollard_z, fairlead_z, env):
+    """当前潮位下桩与导缆孔的高差（桩高 − 孔高 − 潮位）。
 
-    - autoLength=True 时 L0 取初始几何长度；否则用录入长度。
-    - 有效原长 = L0 / (1 + T0/k)，则初始张紧时 T(L0)=k*T0/k=T0（按安装状态）。
-      实现中直接令初始长度对应预张力：L0_eff = L_init / (1 + T0/k)。
+    潮位以 tide=0 时水面为基准；船随水面整体升降，固定于码头的缆桩不随潮。
+    落潮（tide 为负）→ 高差增大 → 缆被"提起"、实际缆长增大、水平投影占比减小。
     """
+    return (bollard_z - fairlead_z) - env.get("tide", 0.0)
+
+
+def prepare_lines(plan, bollards, state0, env0, ship):
+    """预处理缆绳：确定安装参考长度与有效无载原长 L0_eff。
+
+    - autoLength=True：参考长度 L_ref 取安装时刻（初始船位、初始潮位）的
+      实际三维缆长；
+    - autoLength=False：L_ref 用用户手工录入的长度（安装时两系点间的缆长）。
+    - L_ref 对应预张力 T0，故真正的无载原长 L0_eff = L_ref / (1 + T0/k)：
+      手填长度缩短 → L0_eff 减小 → 初始应变/张力增大，后续平衡与失效随之变化；
+      手填长度过长则初始即松弛（T=0）。
+    """
+    fairlead_z = {f["id"]: f.get("z", 3.0) for f in ship.get("fairleads", [])}
     out = []
     for ln in plan["lines"]:
-        L0 = ln["length"]
-        if ln.get("autoLength", True):
-            px, py = fairlead_world(None, ln["local"], state0)
-            b = bollards[ln["bollardId"]]
-            L0 = math.hypot(b[0] - px, b[1] - py)
+        bx, by, bz = bollards[ln["bollardId"]]
         px, py = fairlead_world(None, ln["local"], state0)
-        b = bollards[ln["bollardId"]]
-        L_init = math.hypot(b[0] - px, b[1] - py)
+        fz = ln.get("fairleadZ", fairlead_z.get(ln.get("fairleadId"), 3.0))
+        dz0 = line_dz(bz, fz, env0)
+        rho0 = math.hypot(bx - px, by - py)
+        L_init = math.hypot(rho0, dz0)
+        if ln.get("autoLength", True):
+            L_ref = L_init
+        else:
+            L_ref = max(float(ln.get("length", L_init)), 1e-6)
         k = max(ln["k"], 1e-9)
         T0 = max(ln.get("pretension", 0.0), 0.0)
-        L0_eff = L_init / (1.0 + T0 / k)
+        L0_eff = L_ref / (1.0 + T0 / k)
         d = dict(ln)
-        d["length"] = L0
-        d["L0_eff"] = L0_eff
+        d["length"] = L_ref        # 安装参考长度（手填时即为录入值）
+        d["lengthAuto"] = L_init   # 安装几何长度（信息用）
+        d["L0_eff"] = L0_eff       # 真正的无载原长，进入应变/张力/平衡
+        d["bollardZ"] = bz
+        d["fairleadZ"] = fz
         d["active"] = ln.get("active", True)
         d.setdefault("failed", False)
         out.append(d)
@@ -336,9 +396,9 @@ def run_simulation(scenario, plan, dt=None):
     fender_k = scenario.get("fenderK", 50000.0)
     imba_threshold = scenario.get("imbaThreshold", 20.0)
 
-    bollards = {b["id"]: (b["x"], b["y"]) for b in scenario["bollards"]}
+    bollards = {b["id"]: (b["x"], b["y"], b.get("z", 5.0)) for b in scenario["bollards"]}
     env0 = interpolate_env(scenario["env"], 0.0, imba_threshold)
-    lines = prepare_lines(plan, bollards, state0, env0)
+    lines = prepare_lines(plan, bollards, state0, env0, ship)
 
     # 环境参数补充（湿表面系数、风力矩臂等）
     def enrich_env(env):
@@ -361,11 +421,14 @@ def run_simulation(scenario, plan, dt=None):
         c = current_force(env)
         ext = {"fx": w["fx"] + c["fx"], "fy": w["fy"] + c["fy"], "m": w["m"] + c["m"]}
 
+        # 每一步是当前载荷下的准静态平衡：从安装船位重新求解，
+        # 避免上一步漂移状态在无外载时把缆绳"带松"。
         # 主动集：失效缆卸载后，反复平衡直到无新松弛/失效
         newly_failed = []
+        guess = list(state0)
         for outer in range(len(lines) + 2):
             state, tensions, R = solve_equilibrium(
-                state, lines, bollards, env, ship, ext, fender_k)
+                guess, lines, bollards, env, ship, ext, fender_k)
             changed = False
             for ln in lines:
                 if not ln.get("active", True) or ln.get("failed", False):
@@ -384,7 +447,8 @@ def run_simulation(scenario, plan, dt=None):
         residual_force = math.hypot(R[0], R[1])
         residual_moment = abs(R[2])
         imba_force = max(0.0, residual_force - imba_threshold)
-        imba_moment = max(0.0, residual_moment - imba_threshold * ship["L"] * 0.25)
+        # 力矩阈值：力阈值 × 半船长（30 kN × 90 m ≈ 2700 kN·m）
+        imba_moment = max(0.0, residual_moment - imba_threshold * ship["L"] * 0.5)
         imbalanced = imba_force > 1.0 or imba_moment > 1.0
 
         if imbalanced and first_imbalance is None and t > 1e-9:
@@ -395,11 +459,25 @@ def run_simulation(scenario, plan, dt=None):
 
         util = {}
         line_T = {}
+        strain = {}
+        vangle = {}
+        length3d = {}
         for ln in lines:
             T = tensions.get(ln["id"], 0.0)
             line_T[ln["id"]] = T
             sl = max(ln["safeLoad"], 1e-9)
             util[ln["id"]] = T / sl
+            if ln.get("active", True) and not ln.get("failed", False):
+                dz = line_dz(ln.get("bollardZ", 5.0), ln.get("fairleadZ", 3.0), env)
+                info = line_force(bollards[ln["bollardId"]], ln["local"], state,
+                                  ln["L0_eff"], ln["k"], dz=dz)
+                strain[ln["id"]] = max(0.0, info["strain"])
+                vangle[ln["id"]] = info["vAngle"]
+                length3d[ln["id"]] = info["L"]
+            else:
+                strain[ln["id"]] = 0.0
+                vangle[ln["id"]] = 0.0
+                length3d[ln["id"]] = 0.0
 
         # 主导载荷：比较横向风力/纵向风力/横向流力/纵向流力的量级
         comps = [
@@ -416,6 +494,9 @@ def run_simulation(scenario, plan, dt=None):
             "displacement": {"x": state[0] - state0[0], "y": state[1] - state0[1]},
             "tensions": line_T,
             "util": util,
+            "strain": strain,
+            "vAngle": vangle,
+            "length3d": length3d,
             "failed": {ln["id"]: ln.get("failed", False) for ln in lines},
             "active": {ln["id"]: ln.get("active", True) for ln in lines},
             "residual": {"fx": R[0], "fy": R[1], "m": R[2],

@@ -106,12 +106,17 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_json()
         except Exception as exc:
             return self.send_json({"error": f"请求体解析失败: {exc}"}, 400)
+        if not isinstance(body, dict):
+            return self.send_json({"error": "请求体必须为 JSON 对象"}, 400)
 
         if path == "/api/scenarios":
             return self.send_json({"id": db.save_scenario(body)})
         if path == "/api/plans":
-            if not body.get("scenarioId"):
-                return self.send_json({"error": "缺少 scenarioId"}, 400)
+            sid = body.get("scenarioId")
+            if not isinstance(sid, str) or not sid:
+                return self.send_json(
+                    {"error": "scenarioId 必须为标量字符串（是否误用了创建接口的整个返回对象？）"}, 400)
+            body["scenarioId"] = sid
             return self.send_json({"id": db.save_plan(body)})
         if path == "/api/simulate":
             scenario = body.get("scenario")

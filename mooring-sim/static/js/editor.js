@@ -30,10 +30,12 @@ const Editor = {
   redraw() {
     if (!this.canvas || !App.scenario || !App.plan) return;
     resizeCanvasToDisplay(this.canvas);
-    const step = App.sim ? currentSimStep(App.sim) : null;
+    const emgSim = window.Emergency ? Emergency.activeSim() : null;
+    const step = emgSim ? currentSimStep(emgSim) : (App.sim ? currentSimStep(App.sim) : null);
     drawScene({ ctx: this.ctx, vp: this.vp, scenario: App.scenario,
       plan: App.plan, step, selectedLineId: App.selectedLineId,
       dimmed: false });
+    this.drawTugArrows(step);
     // 引线模式的橡皮筋
     if (this.connecting && this.connecting.mouse) {
       const fl = App.scenario.ship.fairleads.find(f => f.id === this.connecting.fairleadId);
@@ -45,6 +47,28 @@ const Editor = {
       this.ctx.lineTo(this.connecting.mouse.x, this.connecting.mouse.y);
       this.ctx.stroke(); this.ctx.setLineDash([]);
     }
+  },
+
+  // 应急拖轮力箭头（俯视图右侧标注当前时刻生效拖轮）
+  drawTugArrows(step) {
+    if (!step || !step.tugs || !step.tugs.length) return;
+    const ctx = this.ctx;
+    const W = this.canvas.clientWidth;
+    step.tugs.forEach((g, i) => {
+      const ox = W - 130, oy = 110 + i * 26;
+      const len = 22 + Math.min(22, g.force / 40);
+      const dx = Math.cos(g.angle) * len, dy = -Math.sin(g.angle) * len;
+      ctx.strokeStyle = "#f5b041"; ctx.fillStyle = "#f5b041"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(ox - dx, oy - dy); ctx.lineTo(ox, oy); ctx.stroke();
+      const ang = Math.atan2(dy, dx);
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(ox - 8 * Math.cos(ang - 0.4), oy - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(ox - 8 * Math.cos(ang + 0.4), oy - 8 * Math.sin(ang + 0.4));
+      ctx.closePath(); ctx.fill();
+      ctx.font = "10px sans-serif";
+      ctx.fillText(`${g.name} ${Math.round(g.force)}kN`, ox - 60, oy - 8);
+    });
   },
 
   // ------------------------------------------------ 画布事件
@@ -282,7 +306,8 @@ function renderPanels() {
 function renderLineTable() {
   const tb = U.$("#lineTable tbody");
   tb.innerHTML = "";
-  const step = App.sim ? currentSimStep(App.sim) : null;
+  const sim = window.Emergency && Emergency.activeSim() ? Emergency.activeSim() : App.sim;
+  const step = sim ? currentSimStep(sim) : null;
   for (const l of App.plan.lines) {
     const b = App.scenario.bollards.find(b => b.id === l.bollardId);
     const u = step ? (step.util[l.id] || 0) : null;
@@ -484,24 +509,34 @@ function renderShipPanel() {
 
 function renderResultPanel() {
   const box = U.$("#resultPanel");
-  if (!App.sim) { box.innerHTML = '<p class="muted">求解中…</p>'; return; }
-  const s = App.sim.summary;
-  const step = currentSimStep(App.sim);
+  const emgSim = window.Emergency ? Emergency.activeSim() : null;
+  const sim = emgSim || App.sim;
+  if (!sim) { box.innerHTML = '<p class="muted">求解中…</p>'; return; }
+  const s = sim.summary;
+  const step = currentSimStep(sim);
   const balBadge = s.balanced
     ? '<span class="badge ok">全程平衡</span>'
     : '<span class="badge bad">出现失衡/断缆</span>';
+  const emgBadge = emgSim
+    ? `<span class="badge warn">应急推演（${s.nActions || 0}动作${s.nRejected ? `，${s.nRejected}条拒收` : ""}）</span>`
+    : "";
   let html = `<div class="kpi-grid">
-    <div class="kpi"><div class="k">结论</div><div class="v">${balBadge}</div></div>
+    <div class="kpi"><div class="k">结论</div><div class="v">${balBadge} ${emgBadge}</div></div>
     <div class="k"><div class="k">最早失衡时刻</div><div class="v">${s.firstImbalance == null ? "—" : s.firstImbalance.toFixed(2) + " h"}</div></div>
     <div class="k"><div class="k">首先失效缆绳</div><div class="v" style="font-size:14px">${s.firstFailure ? s.firstFailure.name + " @ " + s.firstFailure.time.toFixed(2) + "h" : "—"}</div></div>
     <div class="k"><div class="k">最大残余载荷</div><div class="v">${s.maxResidual.toFixed(0)} kN</div></div>
     <div class="k"><div class="k">最大船位偏移</div><div class="v">${s.maxDisplacement.toFixed(2)} m</div></div>
     <div class="k"><div class="k">当前主导载荷</div><div class="v" style="font-size:14px">${step.dominant} ${step.dominantMag.toFixed(0)}kN</div></div>
-  </div>
-  <h4>当前时刻各缆利用率（t=${step.t.toFixed(2)}h，潮位 ${step.env.tide.toFixed(2)}m）</h4>`;
+  </div>`;
+  if (emgSim && step.tugs && step.tugs.length) {
+    html += `<p class="muted" style="margin:4px 0">当前时刻生效拖轮：${step.tugs.map(g =>
+      `${g.name} ${Math.round(g.force)}kN（${g.t0.toFixed(1)}–${g.t1.toFixed(1)}h）`).join("、")}</p>`;
+  }
+  html += `<h4>当前时刻各缆利用率（t=${step.t.toFixed(2)}h，潮位 ${step.env.tide.toFixed(2)}m）</h4>`;
   for (const l of App.plan.lines) {
     const u = step.util[l.id] || 0, T = step.tensions[l.id] || 0;
-    const failed = step.failed[l.id], inactive = l.active === false;
+    const failed = step.failed[l.id];
+    const inactive = (step.active?.[l.id] === false) && l.active === false;
     const strain = step.strain?.[l.id] ?? 0;
     const va = step.vAngle?.[l.id] ?? 0;
     let detail;

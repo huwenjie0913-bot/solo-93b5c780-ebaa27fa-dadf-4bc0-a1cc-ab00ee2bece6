@@ -2,6 +2,8 @@
 const Compare = {
   planA: null, planB: null,
   simA: null, simB: null,
+  actionsB: null,      // 方案乙叠加的应急动作（null=普通方案）
+  emgNameB: "",
   vpA: null, vpB: null,
   playing: false, raf: null, lastTs: null,
 
@@ -12,8 +14,44 @@ const Compare = {
     U.$("#btnComparePlay").onclick = () => this.togglePlay();
     U.$("#comparePlanA").onchange = () => this.loadSelection();
     U.$("#comparePlanB").onchange = () => this.loadSelection();
+    U.$("#cmpUseEmergency").onchange = e => this.toggleEmergency(e.target.checked);
+    U.$("#cmpEmgSelect").onchange = () => this.pickEmergency();
     U.$("#cmpTimelineA").addEventListener("click", e => this.seek(e));
     U.$("#cmpTimelineB").addEventListener("click", e => this.seek(e));
+  },
+
+  markEmergencyDirty() {
+    // 应急动作在编辑侧变化后，若对比视图正开着则提示重跑
+    const chk = U.$("#cmpUseEmergency");
+    if (chk && chk.checked && U.$("#viewCompare").style.display !== "none") {
+      U.$("#cmpVerdict").innerHTML = '<p class="muted">应急动作已修改，点“并排回放”重新计算。</p>';
+    }
+  },
+
+  async toggleEmergency(on) {
+    const selB = U.$("#comparePlanB");
+    const emgSel = U.$("#cmpEmgSelect");
+    selB.style.display = on ? "none" : "";
+    emgSel.style.display = on ? "" : "none";
+    if (on) {
+      const list = await U.api(`/api/scenarios/${App.scenario.id}/emergency-plans`);
+      emgSel.innerHTML = "";
+      emgSel.appendChild(U.el("option", { value: "" }, "★ 当前编辑中的动作"));
+      list.forEach(p => emgSel.appendChild(U.el("option", { value: p.id }, p.name)));
+      if (!Emergency.actions.length && list.length) {
+        emgSel.value = list[0].id;
+      }
+    }
+  },
+
+  async pickEmergency() {
+    // 选择已存应急方案时载入到编辑侧并在对比时使用
+    const id = U.$("#cmpEmgSelect").value;
+    if (id) {
+      const ep = await U.api("/api/emergency-plans/" + id);
+      Emergency.actions = (ep.actions || []).map(a => Object.assign({ id: U.uid("act") }, a));
+      Emergency.sortActions();
+    }
   },
 
   async open() {
@@ -53,9 +91,32 @@ const Compare = {
 
   async run() {
     await this.loadSelection();
+    const useEmg = U.$("#cmpUseEmergency").checked;
+    const emgId = U.$("#cmpEmgSelect").value;
+    let bodyA = { scenario: App.scenario, plan: this.planA };
+    let bodyB;
+    this.actionsB = null; this.emgNameB = "";
+    if (useEmg) {
+      if (emgId) {
+        const ep = await U.api("/api/emergency-plans/" + emgId);
+        Emergency.actions = (ep.actions || []).map(a => Object.assign({ id: U.uid("act") }, a));
+        Emergency.sortActions();
+        this.emgNameB = ep.name;
+      } else {
+        this.emgNameB = "当前应急动作";
+      }
+      if (!Emergency.actions.length) { alert("应急动作表为空，请先在“应急处置”页安排动作。"); return; }
+      this.actionsB = Emergency.actions.map(a => JSON.parse(JSON.stringify(a)));
+      bodyB = { scenario: App.scenario, plan: this.planB, actions: this.actionsB };
+      U.$("#cmpTitleB").textContent = "方案乙：" + this.planB.name + " + " + this.emgNameB;
+    } else {
+      bodyB = { scenario: App.scenario, plan: this.planB };
+      U.$("#cmpTitleB").textContent = "方案乙：" + this.planB.name;
+    }
+    U.$("#cmpTitleA").textContent = "方案甲：" + this.planA.name;
     [this.simA, this.simB] = await Promise.all([
-      U.api("/api/simulate", { method: "POST", body: { scenario: App.scenario, plan: this.planA } }),
-      U.api("/api/simulate", { method: "POST", body: { scenario: App.scenario, plan: this.planB } }),
+      U.api("/api/simulate", { method: "POST", body: bodyA }),
+      U.api("/api/simulate", { method: "POST", body: bodyB }),
     ]);
     App.compare = this;
     const box = Editor.worldBox();
@@ -96,15 +157,16 @@ const Compare = {
 
   refreshFrame() {
     if (!this.simA || !this.simB) return;
-    const drawCol = (cvId, vp, plan, sim) => {
+    const drawCol = (cvId, vp, plan, sim, actions) => {
       const canvas = U.$("#" + cvId);
       resizeCanvasToDisplay(canvas);
       drawScene({ ctx: canvas.getContext("2d"), vp, scenario: App.scenario,
         plan, step: this.stepAt(sim), dimmed: false });
-      this.drawMiniTimeline(cvId === "cmpCanvasA" ? "cmpTimelineA" : "cmpTimelineB", plan, sim);
+      this.drawMiniTimeline(cvId === "cmpCanvasA" ? "cmpTimelineA" : "cmpTimelineB",
+        plan, sim, actions);
     };
-    drawCol("cmpCanvasA", this.vpA, this.planA, this.simA);
-    drawCol("cmpCanvasB", this.vpB, this.planB, this.simB);
+    drawCol("cmpCanvasA", this.vpA, this.planA, this.simA, null);
+    drawCol("cmpCanvasB", this.vpB, this.planB, this.simB, this.actionsB);
     U.$("#cmpTime").textContent = Player.timeT.toFixed(2);
     this.drawSummary("cmpSummaryA", this.planA, this.simA);
     this.drawSummary("cmpSummaryB", this.planB, this.simB);
@@ -115,14 +177,16 @@ const Compare = {
     const el = U.$("#" + elId);
     const activeLines = plan.lines.filter(l => l.active !== false);
     const maxU = Math.max(...activeLines.map(l => st.util[l.id] || 0));
+    const rej = sim.summary && sim.summary.nRejected
+      ? ` ｜ <span style="color:#f5b041">${sim.summary.nRejected} 条动作拒收</span>` : "";
     el.innerHTML = `
       <b>t=${st.t.toFixed(2)}h</b> ｜ 主导：${st.dominant} ${st.dominantMag.toFixed(0)}kN<br>
       偏移 Δy=${st.displacement.y.toFixed(2)}m Δx=${st.displacement.x.toFixed(2)}m 首摇=${(st.state.psi * 180 / Math.PI).toFixed(2)}°<br>
       未平衡 ${st.residual.force.toFixed(0)} kN ｜ 力矩 ${st.residual.m.toFixed(0)} kN·m ｜ 最高利用率 ${(maxU * 100).toFixed(0)}%
-      ${st.newFailures.length ? ` ｜ <span style="color:#e74c3c">断裂：${st.newFailures.map(id => plan.lines.find(l => l.id === id)?.name).join("、")}</span>` : ""}`;
+      ${st.newFailures.length ? ` ｜ <span style="color:#e74c3c">断裂：${st.newFailures.map(id => plan.lines.find(l => l.id === id)?.name).join("、")}</span>` : ""}${rej}`;
   },
 
-  drawMiniTimeline(cvId, plan, sim) {
+  drawMiniTimeline(cvId, plan, sim, actions) {
     const canvas = U.$("#" + cvId);
     resizeCanvasToDisplay(canvas);
     const ctx = canvas.getContext("2d");
@@ -130,19 +194,37 @@ const Compare = {
     ctx.clearRect(0, 0, W, H);
     const dur = App.scenario.duration;
     const x = t => pad + (t / dur) * (W - pad - 12);
+    const top = actions && actions.length ? 12 : 4;
+    // 应急动作小标记
+    if (actions && actions.length) {
+      const rej = new Set((sim.actionResults || []).filter(r => r.status === "rejected").map(r => r.actionId));
+      for (const a of actions) {
+        const col = EMG_MARKER_COLOR[a.type] || "#aaa";
+        ctx.fillStyle = rej.has(a.id) ? "#566573" : col;
+        if (a.type === "tugForce" && a.duration > 0) {
+          ctx.fillStyle = "rgba(245,176,65,.18)";
+          ctx.fillRect(x(a.t), 2, x(a.t + a.duration) - x(a.t), 8);
+          ctx.fillStyle = rej.has(a.id) ? "#566573" : col;
+        }
+        ctx.beginPath(); ctx.arc(x(a.t), 6, 3.5, 0, 7); ctx.fill();
+      }
+    }
     // 利用率曲线
-    ctx.fillStyle = "#0e1c2f"; ctx.fillRect(pad, 4, W - pad - 12, 44);
+    ctx.fillStyle = "#0e1c2f"; ctx.fillRect(pad, top, W - pad - 12, 44);
     ctx.strokeStyle = "rgba(231,76,60,.7)";
-    ctx.beginPath(); ctx.moveTo(pad, 4 + 44 * (1 - 1 / 1.3));
-    ctx.lineTo(W - 12, 4 + 44 * (1 - 1 / 1.3)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad, top + 44 * (1 - 1 / 1.3));
+    ctx.lineTo(W - 12, top + 44 * (1 - 1 / 1.3)); ctx.stroke();
     for (const line of plan.lines) {
-      if (line.active === false) continue;
+      if (line.active === false && !(actions && actions.length)) continue;
       ctx.strokeStyle = U.lineTypeColor(line.type); ctx.lineWidth = 1.2;
       ctx.beginPath();
-      sim.steps.forEach((s, i) => {
+      let pen = false;
+      sim.steps.forEach((s) => {
+        const wasActive = s.active[line.id] !== false && !s.failed[line.id];
+        if (!wasActive) { pen = false; return; }
         const u = U.clamp(s.util[line.id] || 0, 0, 1.3);
-        const yy = 4 + 44 * (1 - u / 1.3);
-        if (i === 0) ctx.moveTo(x(s.t), yy); else ctx.lineTo(x(s.t), yy);
+        const yy = top + 44 * (1 - u / 1.3);
+        if (pen) ctx.lineTo(x(s.t), yy); else { ctx.moveTo(x(s.t), yy); pen = true; }
       });
       ctx.stroke();
     }

@@ -28,6 +28,9 @@ async function loadScenario(id) {
   }
   ensureDefaults();
   Editor.init();
+  Emergency.reset();
+  Emergency.refreshSavedPlans();
+  U.$("#emgHi").value = App.scenario.duration;
   Player.setTime(0);
   await simulateCurrent();
   refreshAllSelectors();
@@ -44,6 +47,8 @@ async function switchPlan(id) {
   App.plan = await U.api("/api/plans/" + id);
   ensureDefaults();
   App.selectedLineId = null;
+  Emergency.reset();
+  Emergency.refreshSavedPlans();
   Player.setTime(0);
   await simulateCurrent();
   renderPanels();
@@ -80,6 +85,7 @@ async function init() {
   Player.init();
   Compare.init();
   Brief.init();
+  Emergency.init();
 
   const list = await listAllScenarios();
   await loadScenario(list[0].id);

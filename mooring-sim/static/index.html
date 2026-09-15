@@ -78,6 +78,7 @@
   <aside class="sidebar">
     <div class="tabs">
       <button class="tab active" data-tab="lines">缆绳</button>
+      <button class="tab" data-tab="emergency">应急处置</button>
       <button class="tab" data-tab="env">环境分时</button>
       <button class="tab" data-tab="ship">船/泊位</button>
       <button class="tab" data-tab="result">结果</button>
@@ -93,6 +94,59 @@
       </table>
       <div class="line-detail" id="lineDetail">
         <p class="muted">点击画布或表格中的缆绳编辑；取消勾选"启用"可停用某根缆。</p>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="emergency">
+      <div class="emg-panel">
+        <p class="muted" style="font-size:11.5px">
+          在时间轴上安排处置动作，拖动标记可改时刻；求解器按时间序执行，
+          每次动作或断缆级联后重新求平衡。
+          <b>计划动作</b>为实心标记，<b>自动失效</b>为红 ✖。</p>
+        <div class="emg-add">
+          <select id="emgType">
+            <option value="enableLine">启用备用缆</option>
+            <option value="disableLine">停用受损缆</option>
+            <option value="setPretension">调整预张力</option>
+            <option value="tugForce">限时拖轮力</option>
+          </select>
+          <button class="btn small primary" id="btnEmgAdd">＋ 在播放头时刻插入</button>
+        </div>
+        <div id="emgList" class="emg-list"></div>
+
+        <div class="emg-section">
+          <h4>最晚介入时刻</h4>
+          <div class="emg-latest-grid">
+            <label>区间起 h<input type="number" id="emgLo" value="0.0" step="0.1" min="0"></label>
+            <label>区间止 h<input type="number" id="emgHi" value="3.2" step="0.1" min="0"></label>
+            <label>搜索步长 h<input type="number" id="emgRes" value="0.2" step="0.05" min="0.05"></label>
+            <button class="btn small primary" id="btnEmgLatest">寻找最晚介入时刻</button>
+          </div>
+          <div id="emgLatestResult" class="emg-latest-result muted">
+            将整套动作整体平移、反复推演：返回仍能避免失衡的最晚时刻与其紧邻的失败时刻。
+          </div>
+          <button class="btn small" id="btnEmgApplyLatest" style="display:none">应用该时刻并回放</button>
+        </div>
+
+        <div class="emg-section">
+          <h4>应急方案</h4>
+          <div class="emg-plan-row">
+            <select id="emgSavedSelect" title="已保存的应急方案"></select>
+            <button class="btn small" id="btnEmgLoad">载入</button>
+            <button class="btn small primary" id="btnEmgSave">另存为应急方案</button>
+            <button class="btn small danger" id="btnEmgDelete">删除</button>
+          </div>
+          <label class="emg-compare-row"><input type="checkbox" id="emgCompareChk">
+            双方案对比中，把当前方案与这套动作并排回放（方案乙 = 原方案+应急动作）</label>
+        </div>
+
+        <div class="emg-section">
+          <h4>事件与动作前后变化</h4>
+          <div id="emgEvents" class="emg-events">
+            <p class="muted">安排动作并求解后，此处按时间列出计划动作、自动断缆及其前后的
+              缆绳利用率、船体偏移与未平衡载荷。</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -150,6 +204,9 @@
     <button id="btnBackEdit" class="btn">← 返回编辑</button>
     <label>方案甲 <select id="comparePlanA"></select></label>
     <label>方案乙 <select id="comparePlanB"></select></label>
+    <label class="emg-cmp-label"><input type="checkbox" id="cmpUseEmergency">
+      方案乙用「原方案 + 当前应急动作」</label>
+    <select id="cmpEmgSelect" style="display:none;max-width:180px"></select>
     <button id="btnCompareRun" class="btn primary">并排回放</button>
     <button id="btnComparePlay" class="btn">▶ 同步播放</button>
     <span class="time-readout"><b id="cmpTime">0.0</b> h</span>
@@ -178,6 +235,7 @@
 <script src="/static/js/timeline.js"></script>
 <script src="/static/js/player.js"></script>
 <script src="/static/js/compare.js"></script>
+<script src="/static/js/emergency.js"></script>
 <script src="/static/js/brief.js"></script>
 <script src="/static/js/app.js"></script>
 </body>

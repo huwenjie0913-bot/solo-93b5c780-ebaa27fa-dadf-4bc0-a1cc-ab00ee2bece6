@@ -34,13 +34,51 @@ def init_db():
             created_at REAL,
             updated_at REAL
         );
+        CREATE TABLE IF NOT EXISTS emergency_plans (
+            id TEXT PRIMARY KEY,
+            scenario_id TEXT NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+            plan_id TEXT,
+            name TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at REAL,
+            updated_at REAL
+        );
         """
     )
     conn.commit()
 
     if conn.execute("SELECT COUNT(*) FROM scenarios").fetchone()[0] == 0:
         seed(conn)
+    migrate_demo_spares(conn)
     conn.close()
+
+
+def migrate_demo_spares(conn):
+    """给演示方案A补两根预先停用的备用横缆（应急处置演示用）。
+
+    老库已存在 pl_demo_a 但没有备用缆时执行一次；新库由 seed 直接写入。
+    """
+    row = conn.execute("SELECT data FROM plans WHERE id='pl_demo_a'").fetchone()
+    if not row:
+        return
+    data = json.loads(row["data"])
+    ids = {l.get("id") for l in data.get("lines", [])}
+    if "l_bx" in ids:
+        return
+    spares = [
+        {"id": "l_bx", "name": "备用首横缆", "type": "breast",
+         "fairleadId": "f_bow", "bollardId": "b6", "local": [86.0, -10.0],
+         "length": 36.06, "k": 70000.0, "safeLoad": 2000.0,
+         "pretension": 100.0, "autoLength": True, "active": False},
+        {"id": "l_by", "name": "备用尾横缆", "type": "breast",
+         "fairleadId": "f_stern", "bollardId": "b2", "local": [-86.0, -10.0],
+         "length": 36.06, "k": 70000.0, "safeLoad": 2000.0,
+         "pretension": 100.0, "autoLength": True, "active": False},
+    ]
+    data["lines"].extend(spares)
+    conn.execute("UPDATE plans SET data=? WHERE id='pl_demo_a'",
+                 (json.dumps(data, ensure_ascii=False),))
+    conn.commit()
 
 
 def new_id(prefix):
@@ -103,6 +141,7 @@ def save_scenario(data):
 def delete_scenario(sid):
     conn = get_db()
     conn.execute("DELETE FROM scenarios WHERE id=?", (sid,))
+    conn.execute("DELETE FROM emergency_plans WHERE scenario_id=?", (sid,))
     conn.commit()
     conn.close()
 
@@ -149,6 +188,72 @@ def save_plan(data):
 def delete_plan(pid):
     conn = get_db()
     conn.execute("DELETE FROM plans WHERE id=?", (pid,))
+    conn.execute("DELETE FROM emergency_plans WHERE plan_id=?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------- 应急方案
+def row_to_emergency(r):
+    d = json.loads(r["data"])
+    d["id"] = r["id"]
+    d["scenarioId"] = r["scenario_id"]
+    d["planId"] = r["plan_id"]
+    d["name"] = r["name"]
+    d["createdAt"] = r["created_at"]
+    d["updatedAt"] = r["updated_at"]
+    return d
+
+
+def list_emergency_plans(sid, plan_id=None):
+    conn = get_db()
+    if plan_id:
+        rows = conn.execute(
+            "SELECT * FROM emergency_plans WHERE scenario_id=? AND "
+            "(plan_id=? OR plan_id IS NULL OR plan_id='') ORDER BY updated_at DESC",
+            (sid, plan_id)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM emergency_plans WHERE scenario_id=? ORDER BY updated_at DESC",
+            (sid,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "name": r["name"], "planId": r["plan_id"],
+             "updatedAt": r["updated_at"]} for r in rows]
+
+
+def load_emergency_plan(eid):
+    conn = get_db()
+    r = conn.execute("SELECT * FROM emergency_plans WHERE id=?", (eid,)).fetchone()
+    conn.close()
+    return row_to_emergency(r) if r else None
+
+
+def save_emergency_plan(data):
+    now = time.time()
+    eid = data.get("id") or new_id("em")
+    sid = data.get("scenarioId")
+    if not isinstance(sid, str) or not sid:
+        raise ValueError("scenarioId 必须为标量字符串")
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM emergency_plans WHERE id=?", (eid,)).fetchone()
+    payload = json.dumps(data, ensure_ascii=False)
+    if existing:
+        conn.execute("UPDATE emergency_plans SET name=?, plan_id=?, data=?, updated_at=? WHERE id=?",
+                     (data.get("name", "未命名应急方案"), data.get("planId"), payload, now, eid))
+    else:
+        conn.execute(
+            "INSERT INTO emergency_plans(id,scenario_id,plan_id,name,data,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (eid, sid, data.get("planId"), data.get("name", "未命名应急方案"),
+             payload, now, now))
+    conn.commit()
+    conn.close()
+    return eid
+
+
+def delete_emergency_plan(eid):
+    conn = get_db()
+    conn.execute("DELETE FROM emergency_plans WHERE id=?", (eid,))
     conn.commit()
     conn.close()
 
@@ -246,6 +351,19 @@ def seed(conn):
              "length": L(-86, -10, -120, -28), "k": 50000.0,
              "safeLoad": 800.0, "pretension": 100.0, "autoLength": True,
              "active": True},
+            # 预先停用的备用横缆（应急处置：横缆断裂后启用替代）
+            {"id": "l_bx", "name": "备用首横缆", "type": "breast",
+             "fairleadId": "f_bow", "bollardId": "b6",
+             "local": [86.0, -10.0],
+             "length": L(86, -10, 80, -28), "k": 70000.0,
+             "safeLoad": 2000.0, "pretension": 100.0, "autoLength": True,
+             "active": False},
+            {"id": "l_by", "name": "备用尾横缆", "type": "breast",
+             "fairleadId": "f_stern", "bollardId": "b2",
+             "local": [-86.0, -10.0],
+             "length": L(-86, -10, -80, -28), "k": 70000.0,
+             "safeLoad": 2000.0, "pretension": 100.0, "autoLength": True,
+             "active": False},
         ],
     }
 

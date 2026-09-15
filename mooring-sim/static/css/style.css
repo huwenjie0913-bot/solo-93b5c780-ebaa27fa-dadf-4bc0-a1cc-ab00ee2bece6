@@ -143,6 +143,49 @@ th { color: var(--muted); font-weight: 500; }
 }
 .cmp-verdict h3 { margin: 0 0 4px; }
 
+/* ---------------- 应急处置 ---------------- */
+.emg-panel { display: flex; flex-direction: column; gap: 8px; }
+.emg-add { display: flex; gap: 6px; }
+.emg-add select { flex: 1 1 auto; }
+.emg-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.emg-item {
+  background: var(--panel2); border-radius: 6px; padding: 6px 8px;
+  border-left: 3px solid #888;
+}
+.emg-item.rejected { opacity: .72; }
+.emg-item-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.emg-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.emg-item-fields { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.emg-fld { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: 10.5px; }
+.emg-fld input, .emg-fld select { width: auto; max-width: 120px; padding: 2px 4px; }
+.emg-reason { color: #ffb4ab; font-size: 10.5px; margin-top: 3px; }
+.bad-text { color: #ff8a7d; }
+.ok-text { color: #6fe39a; }
+.warn-text { color: #f7c866; }
+.emg-section { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 2px; }
+.emg-section h4 { margin: 0 0 6px; }
+.emg-latest-grid { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; align-items: end; }
+.emg-latest-grid label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 10.5px; }
+.emg-latest-grid input { width: 100%; }
+.emg-latest-result { margin-top: 6px; font-size: 11.5px; line-height: 1.6; background: #0e1c2f;
+  border-radius: 5px; padding: 6px 8px; }
+.emg-plan-row { display: flex; gap: 6px; }
+.emg-plan-row select { flex: 1 1 auto; min-width: 0; }
+.emg-compare-row { display: flex; gap: 6px; align-items: center; color: var(--muted);
+  font-size: 11px; margin-top: 6px; }
+.emg-events { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.emg-log { background: var(--panel2); border-radius: 5px; padding: 4px 8px; font-size: 11px;
+  cursor: pointer; border-left: 3px solid #566573; }
+.emg-log:hover { background: #24405f; }
+.emg-log.action { border-left-color: #3498db; }
+.emg-log.fail { border-left-color: #e74c3c; }
+.emg-log.reject { border-left-color: #e67e22; }
+.emg-log-t { color: var(--accent); font-weight: 700; margin-right: 6px; }
+.emg-log.fail .emg-log-t { color: #ff8a7d; }
+.emg-log-title { font-weight: 600; }
+.emg-log-delta { color: var(--muted); font-size: 10.5px; margin-top: 2px; }
+.emg-cmp-label { display: flex; gap: 4px; align-items: center; color: var(--muted); font-size: 11.5px; }
+
 /* ---------------- 打印简报 ---------------- */
 @media print {
   body { background: #fff; color: #000; overflow: visible; height: auto; }
